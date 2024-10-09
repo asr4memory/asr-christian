@@ -1,0 +1,3 @@
+pip install
+ConfigArgParse
+-U "ray[data,train,tune,serve]"

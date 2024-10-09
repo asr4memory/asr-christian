@@ -1,0 +1,6 @@
+# all subfolders in output folder
+**/output/*
+
+../asr-christiian/main_ray_for_HF.py
+
+test_whisper.py
