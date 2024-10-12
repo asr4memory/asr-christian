@@ -1,4 +1,5 @@
 # Collection of utility functions for pre-processing
+import pdb
 
 from datasets import load_dataset, DatasetDict
 
@@ -7,12 +8,16 @@ def load_and_prepare_data_from_folder(path,feature_extractor,tokenizer,test_size
     # Laden des Datasets von der bereinigten CSV-Datei
     dataset = load_dataset("audiofolder", data_dir=path)
 
+    # pdb.set_trace()
     # Dataset in Trainings- und Testsets aufteilen
     split_dataset = dataset['train'].train_test_split(test_size=test_size)  # 20% für Testdaten
 
+    split_trainset = split_dataset['train'].train_test_split(test_size=0.1) # 10% of training for validation
+
     # Erstellen eines DatasetDict-Objekts
     dataset_dict = DatasetDict({
-        'train': split_dataset['train'],
+        'train': split_trainset['train'], #split_dataset['train'],
+        'validation': split_trainset['test'],
         'test': split_dataset['test']
     })
 

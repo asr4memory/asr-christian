@@ -26,6 +26,10 @@ from ray.tune.schedulers import ASHAScheduler
 import ray.cloudpickle as pickle
 from ray.train.huggingface.transformers import prepare_trainer
 import ray
+from ray.train.torch import TorchTrainer
+from ray.train import RunConfig, ScalingConfig, CheckpointConfig
+import ray.train
+from ray.train.huggingface.transformers import prepare_trainer, RayTrainReportCallback
 
 logger = logging.getLogger(__name__)
 
@@ -101,22 +105,6 @@ def make_training_kwargs(args):
 
     return hyper_kwargs, training_kwargs
 
-# Define metric for evaluation
-metric = evaluate.load("wer")
-def compute_metrics(pred):
-    pred_ids = pred.predictions
-    label_ids = pred.label_ids
-
-    # replace -100 with the pad_token_id
-    label_ids[label_ids == -100] = tokenizer.pad_token_id
-
-    # we do not want to group tokens when computing the metrics
-    pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-    label_str = tokenizer.batch_decode(label_ids, skip_special_tokens=True)
-
-    wer = 100 * metric.compute(predictions=pred_str, references=label_str)
-
-    return {"wer": wer}
 
 def get_models(model_type,target_language):
     feature_extractor = WhisperFeatureExtractor.from_pretrained(model_type)
@@ -172,9 +160,54 @@ def get_models(model_type,target_language):
 # )
 # processor.save_pretrained(training_args.output_dir)
 
+# Tokenize input sentences
+# def collate_fn(examples: Dict[str, np.array]):
+#     sentence1_key, sentence2_key = task_to_keys[task]
+#     if sentence2_key is None:
+#         outputs = tokenizer(
+#             list(examples[sentence1_key]),
+#             truncation=True,
+#             padding="longest",
+#             return_tensors="pt",
+#         )
+#     else:
+#         outputs = tokenizer(
+#             list(examples[sentence1_key]),
+#             list(examples[sentence2_key]),
+#             truncation=True,
+#             padding="longest",
+#             return_tensors="pt",
+#         )
+#
+#     outputs["labels"] = torch.LongTensor(examples["label"])
+#
+#     # Move all input tensors to GPU
+#     for key, value in outputs.items():
+#         outputs[key] = value.cuda()
+#
+#     return outputs
 
+def train_model(config, training_kwargs=None, data_collator=None):
 
-def train_model(config, training_kwargs=None, model=None, dataset_dict=None, data_collator=None, compute_metrics=None, tokenizer=None, tune=False):
+    # get models
+    model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language)
+
+    # Define metric for evaluation
+    metric = evaluate.load("wer")
+    def compute_metrics(pred):
+        pred_ids = pred.predictions
+        label_ids = pred.label_ids
+
+        # replace -100 with the pad_token_id
+        label_ids[label_ids == -100] = tokenizer.pad_token_id
+
+        # we do not want to group tokens when computing the metrics
+        pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+        label_str = tokenizer.batch_decode(label_ids, skip_special_tokens=True)
+
+        wer = 100 * metric.compute(predictions=pred_str, references=label_str)
+
+        return {"wer": wer}
 
     training_args = Seq2SeqTrainingArguments(
         gradient_checkpointing=True,
@@ -190,48 +223,28 @@ def train_model(config, training_kwargs=None, model=None, dataset_dict=None, dat
         **training_kwargs,
     )
 
-    if tune:
-        ray_datasets = {
-            "train": ray.data.from_huggingface(dataset_dict["train"]),
-            "validation": ray.data.from_huggingface(dataset_dict["validation"]),
-            "test": ray.data.from_huggingface(dataset_dict["test"]),
-        }
+    train_ds = ray.train.get_dataset_shard("train")
+    eval_ds = ray.train.get_dataset_shard("eval")
 
-        pdb.set_trace()
-        train_ds = ray.train.get_dataset_shard("train")
-        eval_ds = ray.train.get_dataset_shard("eval")
+    train_ds_iterable = train_ds.iter_torch_batches(
+        batch_size=16, collate_fn=data_collator # TODO: wha tis collate_fn doing
+    )
+    eval_ds_iterable = eval_ds.iter_torch_batches(
+        batch_size=16, collate_fn=data_collator
+    )
 
-        train_ds_iterable = train_ds.iter_torch_batches(
-            batch_size=16, collate_fn=collate_fn
-        )
-        eval_ds_iterable = eval_ds.iter_torch_batches(
-            batch_size=16, collate_fn=collate_fn
-        )
+    trainer = Seq2SeqTrainer(
+        args=training_args,
+        model=model,
+        train_dataset=train_ds_iterable,
+        eval_dataset=eval_ds_iterable,
+        # data_collator=data_collator,  # TODO: what is this doing?
+        compute_metrics=compute_metrics,
+        tokenizer=tokenizer,
+    )
 
-        trainer = Seq2SeqTrainer(
-            args=training_args,
-            model=model,
-            train_dataset=train_ds_iterable,
-            eval_dataset=eval_ds_iterable,
-            data_collator=data_collator,
-            compute_metrics=compute_metrics,
-            tokenizer=tokenizer,
-        )
-    else:
-        trainer = Seq2SeqTrainer(
-            args=training_args,
-            model=model,
-            train_dataset=dataset_dict["train"],
-            eval_dataset=dataset_dict["test"],
-            data_collator=data_collator,
-            compute_metrics=compute_metrics,
-            tokenizer=tokenizer,
-        )
-
-
-    if tune:
-        trainer.add_callback(RayTrainReportCallback())
-        trainer = prepare_trainer(trainer)
+    trainer.add_callback(RayTrainReportCallback())
+    trainer = prepare_trainer(trainer)
 
     trainer.train()
     processor.save_pretrained(training_args.output_dir)
@@ -250,12 +263,11 @@ if __name__ == "__main__":
         args.max_steps = 10
         args.logging_steps = 2
         ray.init()
-        pprint(ray.cluster_resources())
-
+        pprint.pprint(ray.cluster_resources())
 
     logger.debug("Starting main_finetuning.py with arguments %s", args)
 
-    # save settings for reproducibility
+    # save settings for reproducibility, TODO: add random seed
     config = 'Parsed args:\n{}\n\n'.format(pprint.pformat(args.__dict__))
     config_path = os.path.join(args.output_dir, 'config'+ args.output_tag+'.txt')
     if not os.path.exists(config_path):
@@ -263,7 +275,6 @@ if __name__ == "__main__":
         # os.makedirs(os.path.join(os.getcwd(),args.output_dir))
         with open(config_path, 'a') as f:
             print(config, file=f)
-
 
     # get the relevant hyperparameter config and training kwargs (necessary for finetuning with ray)
     config, training_kwargs = make_training_kwargs(args)
@@ -279,44 +290,47 @@ if __name__ == "__main__":
     )
 
     # do hyperparameter optimization way ray tune or simply normal training
-    if args.tune:
-        # TODO: understand settings better
-        # max_num_epochs = 10
-        scheduler = ASHAScheduler(
-            metric="loss",
-            mode="min",
-            max_t=args.max_t,
-            grace_period=1,
-            reduction_factor=2,
-        )
+    ray_datasets = {
+        "train": ray.data.from_huggingface(dataset_dict["train"]),
+        "validation": ray.data.from_huggingface(dataset_dict["validation"]),
+        "test": ray.data.from_huggingface(dataset_dict["test"]),
+    }
+    trainer = TorchTrainer(
+        partial(train_model, training_kwargs=training_kwargs,
+                data_collator=data_collator),
+        scaling_config=ScalingConfig(num_workers=2, use_gpu=False),
+        datasets={
+            "train": ray_datasets["train"],
+            "eval": ray_datasets["validation"],
+        },
+        run_config=RunConfig(
+            checkpoint_config=CheckpointConfig(
+                num_to_keep=1,
+                checkpoint_score_attribute="eval_loss",
+                checkpoint_score_order="min",
+            ),
+        ),
+    )
 
-        # gpus_per_trial = 1
-        # num_samples = 5
-        result = tune.run(
-            partial(train_model, training_kwargs=training_kwargs, model=model, dataset_dict=dataset_dict, data_collator=data_collator, compute_metrics=compute_metrics, tokenizer=tokenizer),
-            resources_per_trial={"cpu": args.cpus_per_trial, "gpu": args.gpus_per_trial},
-            config=config,
-            num_samples=args.num_samples,
-            scheduler=scheduler,
-        )
-        best_trial = result.get_best_trial("loss", "min", "last")
-    else:
-        train_model(config, training_kwargs=training_kwargs, model=model, dataset_dict=dataset_dict, data_collator=data_collator, compute_metrics=compute_metrics, tokenizer=tokenizer)
+    result = trainer.fit()
 
-
-    # main(num_samples=500, max_num_epochs=1000, gpus_per_trial=0)
-
-
-# Gesamtes DatasetDict anzeigen
-# print(dataset_dict)
-#
-# check if feature extractor and tokenizer works properly
-# input_str = dataset_dict["train"][0]["transcription"]
-# labels = tokenizer(input_str).input_ids
-# decoded_with_special = tokenizer.decode(labels, skip_special_tokens=False)
-# decoded_str = tokenizer.decode(labels, skip_special_tokens=True)
-
-# print(f"Input:                 {input_str}")
-# print(f"Decoded w/ special:    {decoded_with_special}")
-# print(f"Decoded w/out special: {decoded_str}")
-# print(f"Are equal:             {input_str == decoded_str}")
+    # # TODO: understand settings better
+    # # max_num_epochs = 10
+    # scheduler = ASHAScheduler(
+    #     metric="loss",
+    #     mode="min",
+    #     max_t=args.max_t,
+    #     grace_period=1,
+    #     reduction_factor=2,
+    # )
+    #
+    # # gpus_per_trial = 1
+    # # num_samples = 5
+    # result = tune.run(
+    #     partial(train_model, training_kwargs=training_kwargs, model=model, dataset_dict=dataset_dict, data_collator=data_collator, compute_metrics=compute_metrics, tokenizer=tokenizer),
+    #     resources_per_trial={"cpu": args.cpus_per_trial, "gpu": args.gpus_per_trial},
+    #     config=config,
+    #     num_samples=args.num_samples,
+    #     scheduler=scheduler,
+    # )
+    # best_trial = result.get_best_trial("loss", "min", "last")
