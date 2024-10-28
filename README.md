@@ -14,3 +14,10 @@ Working Repo von Christian
 
 * [x] Set up High-Perfomance cluster
 * [x] Submit evaluation job for baseline whisper model
+* [x] prepare code for hyperparameter optimization (from Week 1) \n
+      => Collator Function had to be adapted as Ray Tune datasets changed created a numpy object which could not be processed from HF tokenizer.pad class 
+      
+Next steps:
+* [ ] Evaluate Baseline model (WhisperX e.g.) on test set to directly compare performance with fine-tuned model
+* [ ] Define hyperparameters to optimize
+* [ ] Run first dummy-finetuning on cluster
