@@ -263,7 +263,7 @@ if __name__ == "__main__":
 
     # set random seed for reproducibility
     set_seed(args.random_seed)
-    # param_space = {"seed": tune.randint(0, 1000)},
+    param_space = {"seed": tune.randint(0, 1000)},
 
     # get models
     model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language)
@@ -283,14 +283,7 @@ if __name__ == "__main__":
         # dataset_dict = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
         #                                                  test_size=args.test_split)
     else:
-        ray.init()
-
-        # ray.init(address="auto", _redis_password = os.environ["redis_password"])
-        # register_ray()
-        pprint.pprint(ray.cluster_resources())
-        args.path_to_data = r"/home/chrvt/data/datasets"  # /fzh-wde0459_03_03
-        # dataset_dict = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
-        #                                                  test_size=args.test_split)
+        args.path_to_data = r"../data/datasets"
         dataset_dict = load_and_prepare_data_from_folders(args.path_to_data, feature_extractor, tokenizer,
                                                           test_size=args.test_split, seed=args.random_seed)
 
@@ -443,8 +436,8 @@ if __name__ == "__main__":
             # "seed": tune.randint(0, 1000),   16, #
             "train_loop_config": {
                 "learning_rate": tune.loguniform(1e-5, 1e-1),
-                "warmup_steps": 2, #tune.choice([0,1,2]),
-                "per_device_train_batch_size": 16, #tune.choice([2, 4, 8, 16]), #, 32, 64, 128, 256]),
+                "warmup_steps": tune.choice([0, 50, 100]),
+                "per_device_train_batch_size": tune.choice([1, 2, 3, 4]), #, 32, 64, 128, 256]),
                 "weight_decay": tune.uniform(0.0, 0.2),
                     #tune.grid_search([2e-5]), # , 2e-4, 2e-3, 2e-2
                 # "max_steps": tune_epochs,
@@ -472,9 +465,7 @@ if __name__ == "__main__":
     tune_results.get_dataframe().sort_values("eval_loss")
 
     best_result = tune_results.get_best_result()
-
     print('Best Result', best_result)
-
 
     # save best result into folder
     best_result_list = {}
