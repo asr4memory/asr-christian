@@ -5,7 +5,7 @@ Working Repo von Christian
 
 * [x] Proof of concept: get finetuning script from Peter working
       => improves performance on mini train set
-* [ ] prepare code for hyperparameter optimization
+* [x] prepare code for hyperparameter optimization
       => not seemless integration with ray tune (industry standard for hyperparameter optimization)
 * [x] prepare presentation on hyperparameter optimization
 
@@ -19,5 +19,5 @@ Working Repo von Christian
       
 Next steps:
 * [ ] Evaluate Baseline model (WhisperX e.g.) on test set to directly compare performance with fine-tuned model
-* [ ] Define hyperparameters to optimize
-* [ ] Run first dummy-finetuning on cluster
+* [x] Define hyperparameters to optimize
+* [x] Run first dummy-finetuning on cluster
