@@ -23,11 +23,3 @@ Next steps:
 * [x] Run first dummy-finetuning on cluster
 
 
-# WER-Results on test-set
-
-| Model | Original | BOHB_jan |
-|----------|----------|----------|
-| tiny    | Data 1   | Data 2   |
-| small    | 63.23   | Data 4   |
-| medium   | 60.62   | Data 6   |
-
