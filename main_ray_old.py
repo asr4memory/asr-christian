@@ -6,7 +6,7 @@ import pdb
 import numpy as np
 from time import strftime
 
-from utils import  load_and_prepare_data_from_folder, load_and_prepare_data_from_folders, DataCollatorSpeechSeq2SeqWithPadding, save_file, steps_per_epoch
+from utils import  load_and_prepare_data_from_folder, load_and_prepare_data_from_folders, DataCollatorSpeechSeq2SeqWithPadding, save_file
 import evaluate
 
 # laod models
@@ -45,31 +45,26 @@ logger = logging.getLogger(__name__)
 # Whisper model type choices: https://huggingface.co/models?search=openai/whisper
 # openai/whisper-large-v3 sofa
 
-# https://stackoverflow.com/questions/37987839/how-can-i-run-tensorboard-on-a-remote-server
 
 TUNE_CHOICES = ['small_small', 'large_small_BOHB', 'large_small_OPTUNA', 'large_large']
 def parse_args():
     """ Parses command line arguments for the training """
     parser = configargparse.ArgumentParser()
 
+    # Plotting
+
     # Training settings for Seq2SeqTrainingArguments
     parser.add_argument("--per_device_train_batch_size", type=int, default=16, help="Batch size per device")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="increase by 2x for every 2x decrease in batch size")
-    # The only reason to use gradient accumulation steps is when your whole batch size does not fit on one GPU, so you pay a price in terms of speed to overcome a memory issue.
     parser.add_argument("--output_tag", type=str,
                         default="whisper-tiny-de",
                         help="Base directory where model is save.")
     parser.add_argument("--max_steps", type=int, default=1000, help="Max Number of gradient steps")
-    parser.add_argument("--num_train_epochs", type=int, default=10, help="Max Number of gradient steps")
     # parser.add_argument("--warmup_steps", type=int, default=500, help="Warumup gradient steps")
     # parser.add_argument("--lr", type=float, default=1e-5, help="Initial learning rate.")
     parser.add_argument("--generation_max_length", type=int, default=225, help="Max length of token output")
     parser.add_argument("--save_steps", type=int, default=1000, help="After how many steps to save the model?")
-    # requires the saving steps to be a multiple of the evaluation steps
     parser.add_argument("--eval_steps", type=int, default=1000, help="After how many steps to evaluate model")
-    parser.add_argument("--eval_delay", type=int, default=0, help="Wait eval_delay steps before evaluating.")
-
-
     parser.add_argument("--logging_steps", type=int, default=25, help="After how many steps to do some logging")
 
 
@@ -84,30 +79,18 @@ def parse_args():
     parser.add_argument("--path_to_data", type=str, default="../data/datasets/fzh-wde0459_03_03", help="Path to audio batch-prepared audio files.")
 
 
-    ## Hyperparameter Optimization settings for Ray Tune
-    # Training configs
-    parser.add_argument("--max_warmup_steps", type=int, default=10,
-                        help="For Hyperparam search. What is the max value for warmup?")
-    parser.add_argument("--len_train_set", type=int, default=10,
-                        help="Helper variable to define max_t which is required for schedulers.")
-    parser.add_argument("--max_concurrent_trials", type=int, default=1,
-                        help="Maximum number of trials to run concurrently.")
-
-
+    # Hyperparameter Optimization settings for Ray Tune
     # parser.add_argument("--tune", action="store_true", help="Do Hyperparameter optimization with Ray Tune")
-    parser.add_argument("--num_samples", type=int, default=5, help="Number of times to sample from the hyperparameter space.")
-    parser.add_argument("--num_to_keep", type=int, default=1, help="number of checkpoints to keep on disk")
-    parser.add_argument("--max_t", type=int, default=10, help="Max number of steps for finding the best hyperparameters")
+    parser.add_argument("--num_samples", type=int, default=5, help="Total number of Ray Actors/ different hyperparameters configs to compare.")
+    # parser.add_argument("--max_t", type=int, default=10, help="Max number of steps for finding the best hyperparameters")
     parser.add_argument("--num_workers", type=int, default=1, help="Number of trials that can run at the same time")
     parser.add_argument("--cpus_per_trial", type=int, default=1, help="Number of CPUs per Ray actor")
     parser.add_argument("--gpus_per_trial", type=int, default=0, help="Number of GPUs per Ray actor")
     parser.add_argument("--use_gpu", action="store_true", help="If using GPU for the finetuning")
-    parser.add_argument("--fp16", action="store_true", default=False, help="Training with floating point 16 ")
-
     # For Scheduler and Search algorithm specifically
     parser.add_argument("--search_schedule_mode", type=str, default="large_small_BOHB", choices=TUNE_CHOICES, help="Which Searcher Algorithm and Scheduler combination. See 'get_searcher_and_scheduler' function for details.")
-    parser.add_argument("--reduction_factor", type=int, default=2, help="Factor by which trials are reduced after grace_period of time intervals")
-    parser.add_argument("--grace_period", type=int, default=1, help="With grace_period=n you can force ASHA to train each trial at least for n time interval")
+    parser.add_argument("--reduction_factor", type=int, default=2, help="Factor by which trials are reduced after grace_period of epochs")
+    parser.add_argument("--grace_period", type=int, default=1, help="With grace_period=n you can force ASHA to train each trial at least for n epochs.s")
     # For Population Based Training (PBT): https://docs.ray.io/en/latest/tune/api/doc/ray.tune.schedulers.PopulationBasedTraining.html
     parser.add_argument("--perturbation_interval", type=int, default=10, help="Models will be considered for perturbation at this interval of time_attr.")
     parser.add_argument("--burn_in_period", type=int, default=1, help="Grace Period for PBT")
@@ -131,7 +114,7 @@ def parse_args():
 # only those hyperparameter which should be optimized
 def make_training_kwargs(args):
     # setting for seq2seq trainer
-    # https://huggingface.co/docs/transformers/main_classes/trainer#transformers.Seq2SeqTrainingArguments
+    #https://huggingface.co/docs/transformers/main_classes/trainer#transformers.Seq2SeqTrainingArguments
     # we are orientating ourselves on the orginal whisper hyperparameters https://cdn.openai.com/papers/whisper.pdf
     # this requires changing the beta1 and beta 2 hyperparameters of the AdamW optimizer
 
@@ -140,19 +123,15 @@ def make_training_kwargs(args):
         # "per_device_train_batch_size": args.per_device_train_batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         # "warmup_steps": args.warmup_steps,
-        "len_train_set": args.len_train_set,
-        "num_train_epochs": args.num_train_epochs,
-        "max_steps": 0,
+        "max_steps": args.max_steps,
         "generation_max_length": args.generation_max_length,
         "save_steps": args.save_steps,
         "eval_steps": args.eval_steps,
         "logging_steps": args.logging_steps,
-        "eval_delay": args.eval_delay, #int(args.max_steps/10),
+        "eval_delay": int(args.max_steps/10),
         "adam_beta1": 0.9,
         "adam_beta2": 0.98,
-        "seed": args.random_seed,
-        "fp16": args.fp16,
-        # "torch_empty_cache_steps": 1, # This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of about 10% slower performance.
+        "seed": args.random_seed
     }
     # if args.tune:
     #     hyper_kwargs = {
@@ -207,6 +186,20 @@ def train_model(config, training_kwargs=None, data_collator=None):
 
         return {"wer": wer}
 
+    training_args = Seq2SeqTrainingArguments(
+        gradient_checkpointing=True,
+        fp16=False,
+        evaluation_strategy="steps",
+        predict_with_generate=True,
+        report_to=["tensorboard"],
+        load_best_model_at_end=True,
+        metric_for_best_model="wer",
+        greater_is_better=False,
+        push_to_hub=False,
+        **config,
+        **training_kwargs,
+    )
+
     train_ds = ray.train.get_dataset_shard("train")
     eval_ds = ray.train.get_dataset_shard("eval")
     test_ds = ray.train.get_dataset_shard("test")
@@ -218,36 +211,13 @@ def train_model(config, training_kwargs=None, data_collator=None):
 
     # the data collator takes our pre-processed data and prepares PyTorch tensors ready for the model.
     train_ds_iterable = train_ds.iter_torch_batches(
-        batch_size=config["per_device_train_batch_size"], collate_fn=data_collator)
-
-    eval_ds_iterable = eval_ds.iter_torch_batches(batch_size=config["per_device_train_batch_size"], collate_fn=data_collator)
-
-    test_ds_iterable = test_ds.iter_torch_batches(
         batch_size=config["per_device_train_batch_size"], collate_fn=data_collator
     )
-    training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
-    # training_kwargs["max_steps"] = 1000
-
-    # pdb.set_trace()
-    del training_kwargs['len_train_set']  # we remove this as its not part of Seq2Seq
-    del training_kwargs['num_train_epochs']
-    # del training_kwargs['max_steps']
-    # logger.info('training_kwargs: %s',training_kwargs)
-    training_args = Seq2SeqTrainingArguments(
-        gradient_checkpointing=True,
-        evaluation_strategy="steps",
-        save_strategy = "steps",
-        predict_with_generate=True,
-        report_to=["tensorboard"],
-        load_best_model_at_end=True,
-        metric_for_best_model="wer",
-        greater_is_better=False,
-        push_to_hub=False,
-        # per_device_train_batch_size=16,  # config
-        # per_device_eval_batch_size=16,
-        do_eval=True,
-        **config,
-        **training_kwargs,
+    eval_ds_iterable = eval_ds.iter_torch_batches(
+        batch_size=config["per_device_train_batch_size"], collate_fn=data_collator
+    )
+    test_ds_iterable = test_ds.iter_torch_batches(
+        batch_size=config["per_device_train_batch_size"], collate_fn=data_collator
     )
 
     trainer = Seq2SeqTrainer(
@@ -263,7 +233,6 @@ def train_model(config, training_kwargs=None, data_collator=None):
         # tokenizer=tokenizer, TODO: make sure its not necessary since we do pre-processing already
     )
 
-    # logger.info('Pre Training Test Set Perforamnce ', trainer.evaluate())
 
 
     trainer.add_callback(RayTrainReportCallback())
@@ -310,31 +279,23 @@ if __name__ == "__main__":
         args.path_to_data = r"../data/datasets"
         dataset_dict = load_and_prepare_data_from_folders(args.path_to_data, feature_extractor, tokenizer,
                                                           test_size=args.test_split, seed=args.random_seed)
-        #         # args.pat_to_data = r"../data/datasets/fzh-wde0459_03_03"
+        # args.path_to_data = r"../data/datasets/fzh-wde0459_03_03"
         # dataset_dict = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
         #                                                  test_size=args.test_split)
     else:
         ray.init()
 
-
         # ray.init(address="auto", _redis_password = os.environ["redis_password"])
         # register_ray()
         pprint.pprint(ray.cluster_resources())
-        if args.path_to_data[-1] == 's':
-            args.path_to_data = r"../data/datasets"  # /fzh-wde0459_03_03
-            dataset_dict, len_train_set = load_and_prepare_data_from_folders(args.path_to_data, feature_extractor, tokenizer,
-                                                         test_size=args.test_split, seed=args.random_seed)
-        else:
-            args.path_to_data = r"../data/datasets/fzh-eg_fzh-wde_combined_dataset_v1"
-            dataset_dict, len_train_set = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
-                                                          test_size=args.test_split, seed=args.random_seed) #, seed=args.random_seed)
+        args.path_to_data = r"/home/chrvt/data/datasets"  # /fzh-wde0459_03_03
+        # dataset_dict = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
+        #                                                  test_size=args.test_split)
+        dataset_dict = load_and_prepare_data_from_folders(args.path_to_data, feature_extractor, tokenizer,
+                                                          test_size=args.test_split, seed=args.random_seed)
 
         logger.debug("Starting main_finetuning.py with arguments %s", args)
 
-    logger.info('len_train_set: %s',len_train_set)
-    args.len_train_set = len_train_set
-
-    logger.info("Starting Finetuning for model %s", args.model_type)
 
     # save settings for reproducibility, TODO: add random seed
     config_ = 'Parsed args:\n{}\n\n'.format(pprint.pformat(args.__dict__))
@@ -364,21 +325,20 @@ if __name__ == "__main__":
 
     resources_per_trial={"CPU": args.cpus_per_trial, "GPU": args.gpus_per_trial}
 
-    # https://docs.ray.io/en/latest/_modules/ray/train/torch/torch_trainer.html#TorchTrainer
     trainer = TorchTrainer(
         partial(train_model, training_kwargs=training_kwargs,
-                data_collator=data_collator),  # the training function to execute on each worker.
+                data_collator=data_collator),
         scaling_config=ScalingConfig(num_workers=args.num_workers, use_gpu=args.use_gpu, resources_per_worker = resources_per_trial),
         datasets={
             "train": ray_datasets["train"],
             "eval": ray_datasets["validation"],
             "test": ray_datasets["test"],
         },
-        run_config = RunConfig(
-           checkpoint_config=CheckpointConfig(
-               num_to_keep=args.num_to_keep,
-               checkpoint_score_attribute="eval_loss",
-               checkpoint_score_order="min",
+        run_config=RunConfig(
+            checkpoint_config=CheckpointConfig(
+                num_to_keep=1,
+                checkpoint_score_attribute="eval_loss",
+                checkpoint_score_order="min",
             ),
         ),
     )
@@ -390,8 +350,10 @@ if __name__ == "__main__":
     # Population Based Training for larger problems with a large number of hyperparameters if a learning schedule is acceptable."
 
 
+    from ray.tune.search.bohb import TuneBOHB
+    from ray.tune.search.basic_variant import BasicVariantGenerator
 
-    # args.per_device_train_batch_size = tune.choice([2, 4, 8, 16]).sample()
+
 
     def get_searcher_and_scheduler(args):
         # A search algorithm searches the Hyperparameter space for good combinations.
@@ -402,37 +364,33 @@ if __name__ == "__main__":
         #   https://docs.ray.io/en/latest/tune/api/schedulers.html#tune-scheduler-pbt
         # Check out the FAQ: https://docs.ray.io/en/latest/tune/faq.html#how-does-early-termination-e-g-hyperband-asha-work
 
-        max_t_ = steps_per_epoch(args.len_train_set,args.per_device_train_batch_size) * args.num_train_epochs
-
         if args.search_schedule_mode == 'small_small':
-            from ray.tune.search.basic_variant import BasicVariantGenerator
             scheduler = ASHAScheduler(
-                max_t=max_t_,
+                max_t=args.max_steps,
                 reduction_factor = args.reduction_factor,
                 grace_period = args.grace_period,
-            )
+            )#[0],
             searcher = BasicVariantGenerator()
             # pdb.set_trace()
         elif args.search_schedule_mode == 'large_small_BOHB':
             from ray.tune.schedulers.hb_bohb import HyperBandForBOHB
-            # from ray.tune.search.bohb import TuneBOHB
-            from bohb_search_fix import TuneBOHB_fix
-            # bohb_search.py
             # https://docs.ray.io/en/latest/tune/api/schedulers.html#tune-scheduler-bohb
             scheduler = HyperBandForBOHB(
-                time_attr="step", # defines the "time" as training iterations
-                max_t=max_t_,
+                time_attr="training_iteration", # defines the "time" as training iterations (epochs in our case)
+                max_t=args.max_steps,
                 reduction_factor=args.reduction_factor,
                 stop_last_trials=False,
             )
-            searcher = TuneBOHB_fix()
-            # searcher = tune.search.ConcurrencyLimiter(bohb_search, max_concurrent=args.max_concurrent_trials)
+            bohb_search = TuneBOHB(
+                # space=config_space,  # If you want to set the space manually
+            )
+            searcher = tune.search.ConcurrencyLimiter(bohb_search, max_concurrent=4)
 
         elif args.search_schedule_mode == 'large_small_OPTUNA':
             from ray.tune.search.optuna import OptunaSearch
             # https://docs.ray.io/en/latest/tune/api/suggestion.html#tune-optuna
             scheduler = ASHAScheduler(
-                max_t=max_t_,
+                max_t=args.max_steps,
                 reduction_factor=args.reduction_factor,
                 grace_period=args.grace_period,
             )#[0]
@@ -440,17 +398,15 @@ if __name__ == "__main__":
 
         elif args.search_schedule_mode == 'large_large':
             from ray.tune.schedulers import PopulationBasedTraining
-            from ray.tune.search.basic_variant import BasicVariantGenerator
-
             # https://docs.ray.io/en/latest/tune/api/schedulers.html#tune-scheduler-pbt
             # https://docs.ray.io/en/latest/tune/examples/pbt_guide.html
             scheduler = PopulationBasedTraining(
-                time_attr='step',   # defines the "time" as training iterations (steps in our case)...training_iteration is steps / tune.report() calls where tune.report()=args.save_steps in our case
+                time_attr='training_iteration',   # defines the "time" as training iterations (epochs in our case)
                 perturbation_interval=args.perturbation_interval,
                 hyperparam_mutations={
                     "train_loop_config": {
                                "learning_rate": tune.loguniform(1e-5, 1e-1),
-                               # "per_device_train_batch_size": args.per_device_train_batch_size, # tune.choice([2, 4, 8, 16]), #, 32, 64, 128, 256]),
+                               "per_device_train_batch_size": tune.choice([2, 4, 8, 16]), #, 32, 64, 128, 256]),
                                "weight_decay": tune.uniform(0.0, 0.2),
                     #tune.grid_search([2e-5]), # , 2e-4, 2e-3, 2e-2
                 # "max_steps": tune_epochs,
@@ -478,34 +434,34 @@ if __name__ == "__main__":
     #     "warmup_steps": (0, 500),
     #     "num_epochs": (2, 5)
     # }
-    # https://docs.ray.io/en/latest/tune/api/doc/ray.tune.Tuner.html
+#The training function to execute on each worker.
+# This function can either take in zero arguments or a single Dict argument which is set by defining train_loop_config.
     tuner = Tuner(
         trainer,
         param_space={
+            #
+            # "seed": tune.randint(0, 1000),   16, #
             "train_loop_config": {
                 "learning_rate": tune.loguniform(1e-5, 1e-1),
-                "warmup_steps": tune.randint(0, args.max_warmup_steps + 1), # Sample a integer uniformly between  (inclusive) and 15 (exclusive)
-                "per_device_train_batch_size": args.per_device_train_batch_size, #tune.choice([2, 4, 8, 16]), #args.per_device_train_batch_size, #tune.choice([2, 4, 8, 16]), #, 32, 64, 128, 256]),
+                "warmup_steps": 2, #tune.choice([0,1,2]),
+                "per_device_train_batch_size": 16, #tune.choice([2, 4, 8, 16]), #, 32, 64, 128, 256]),
                 "weight_decay": tune.uniform(0.0, 0.2),
+                    #tune.grid_search([2e-5]), # , 2e-4, 2e-3, 2e-2
                 # "max_steps": tune_epochs,
             }
         },
         tune_config=tune.TuneConfig(
-            max_concurrent_trials=args.max_concurrent_trials,
             metric="eval_loss",
             mode="min",
-            num_samples=args.num_samples, # num_samples (int) – Number of times to sample from the hyperparameter space..
+            num_samples=args.num_samples,
             search_alg=tune_searcher,
             scheduler= tune_scheduler,
 
         ),
-        # run_config – Runtime configuration that is specific to individual trials.
-        # If passed, this will overwrite the run config passed to the Trainer, if applicable.
         run_config=RunConfig(
-            name=args.output_tag,     # folder name where ray workers results are saved and basis for tensorboard viz.
-            # stop={"training_iteration": 100},  # after how many iterations to stop
+            name="tune_transformers",
             checkpoint_config=CheckpointConfig(
-                num_to_keep= args.num_to_keep,
+                num_to_keep=1,
                 checkpoint_score_attribute="eval_loss",
                 checkpoint_score_order="min",
             ),
@@ -513,13 +469,11 @@ if __name__ == "__main__":
     )
     tune_results = tuner.fit()
 
-    # pdb.set_trace()
-
     tune_results.get_dataframe().sort_values("eval_loss")
 
     best_result = tune_results.get_best_result()
 
-    logger.info('Best Result', best_result)
+    print('Best Result', best_result)
 
 
     # save best result into folder
@@ -544,6 +498,8 @@ if __name__ == "__main__":
             model = WhisperForConditionalGeneration.from_pretrained(checkpoint_path)
 
         model.push_to_hub('whisper_finetuning')
+
+
 
 
 # for model evaluation

@@ -148,6 +148,7 @@ def train_model(config, training_kwargs=None, model=None, dataset_dict=None, dat
         **training_kwargs,
     )
 
+    # pdb.set_trace()
     trainer = Seq2SeqTrainer(
         args=training_args,
         model=model,
@@ -197,6 +198,10 @@ if __name__ == "__main__":
 
     # prepare dataset dict
     dataset_dict = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer, test_size=args.test_split)
+    # from utils import load_and_prepare_data_from_folders
+    # dataset_dict = load_and_prepare_data_from_folders(args.path_to_data, feature_extractor, tokenizer,
+    #                                                  test_size=args.test_split)
+
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(
         processor=processor,
         decoder_start_token_id=model.config.decoder_start_token_id,

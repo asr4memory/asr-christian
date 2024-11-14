@@ -52,10 +52,11 @@ def parse_args():
     """ Parses command line arguments for the training """
     parser = configargparse.ArgumentParser()
 
+    # Plotting
+
     # Training settings for Seq2SeqTrainingArguments
     parser.add_argument("--per_device_train_batch_size", type=int, default=16, help="Batch size per device")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="increase by 2x for every 2x decrease in batch size")
-    # The only reason to use gradient accumulation steps is when your whole batch size does not fit on one GPU, so you pay a price in terms of speed to overcome a memory issue.
     parser.add_argument("--output_tag", type=str,
                         default="whisper-tiny-de",
                         help="Base directory where model is save.")

@@ -59,12 +59,12 @@ def load_and_prepare_data_from_folder(path,feature_extractor,tokenizer,test_size
     logger.info('len test set: %s', split_dataset['test'].num_rows)
 
 
-    logger.info('average of first 5 test examples: %s',
-                (sum(dataset_dict['test']['input_features'][0][0]) +
-                      sum(dataset_dict['test']['input_features'][0][1]) +
-                      sum(dataset_dict['test']['input_features'][0][2])
-                       )/split_dataset['test'].num_rows
-                )
+    # logger.info('average of first 5 test examples: %s',
+    #             (sum(dataset_dict['test']['input_features'][0][0]) +
+    #                   sum(dataset_dict['test']['input_features'][0][1]) +
+    #                   sum(dataset_dict['test']['input_features'][0][2])
+    #                    )/split_dataset['test'].num_rows
+    #             )
 
     return dataset_dict, split_trainset['train'].num_rows
 
@@ -112,12 +112,12 @@ def load_and_prepare_data_from_folders(path,feature_extractor,tokenizer,test_siz
     logger.info('len validation set: %s', split_trainset['test'].num_rows)
     logger.info('len test set: %s', split_dataset['test'].num_rows)
 
-    logger.info('average of first 5 test examples: $s',
-                (sum(dataset_dict['test']['input_features'][0][0]) +
-                      sum(dataset_dict['test']['input_features'][0][1]) +
-                      sum(dataset_dict['test']['input_features'][0][2])
-                       )/split_dataset['test'].num_rows
-                )
+    # logger.info('average of first 5 test examples: %s',
+    #             (sum(dataset_dict['test']['input_features'][0][0]) +
+    #                   sum(dataset_dict['test']['input_features'][0][1]) +
+    #                   sum(dataset_dict['test']['input_features'][0][2])
+    #                    )/split_dataset['test'].num_rows
+    #             )
 
     return dataset_dict, split_trainset['train'].num_rows
 
