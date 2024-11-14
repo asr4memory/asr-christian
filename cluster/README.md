@@ -13,7 +13,7 @@
    I used mini-conda as my virtual environment manager: conda create --name <env> --file requirements.txt
 
 
-2. Add the data you want to use in the folder [/data](data) in your home directory. The files used for training are in *eg_fzh-wde_combined_dataset_v1* which you need to download (MMT or ask Peter).
+2. Add the data you want to use in the folder [/data/datasets](data/datasets) in your home directory. The files used for training are in *eg_fzh-wde_combined_dataset_v1* which you need to download (on MMT or ask Peter). 
 
 
 3. Add the [/asr-finetune](asr-finetune) folder into you home directory.
