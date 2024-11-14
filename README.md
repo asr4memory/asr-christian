@@ -21,3 +21,13 @@ Next steps:
 * [ ] Evaluate Baseline model (WhisperX e.g.) on test set to directly compare performance with fine-tuned model
 * [x] Define hyperparameters to optimize
 * [x] Run first dummy-finetuning on cluster
+
+
+# WER-Results on test-set
+
+| Model | Original | BOHB_jan |
+|----------|----------|----------|
+| tiny    | Data 1   | Data 2   |
+| small    | 63.23   | Data 4   |
+| medium   | 60.62   | Data 6   |
+
