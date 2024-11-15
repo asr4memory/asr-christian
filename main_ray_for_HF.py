@@ -8,6 +8,7 @@ from time import strftime
 
 from utils import  load_and_prepare_data_from_folder, load_and_prepare_data_from_folders, DataCollatorSpeechSeq2SeqWithPadding, save_file, steps_per_epoch
 import evaluate
+import math
 
 # laod models
 from transformers import WhisperFeatureExtractor
@@ -302,13 +303,13 @@ if __name__ == "__main__":
     if args.debug:
         args.warmup_steps = 0
         args.eval_steps = 1
-        args.save_steps = 1
+        args.save_steps = 2
         args.max_steps = 2
         args.logging_steps = 1
         ray.init()
         pprint.pprint(ray.cluster_resources())
-        args.path_to_data = r"../data/datasets"
-        dataset_dict = load_and_prepare_data_from_folders(args.path_to_data, feature_extractor, tokenizer,
+        args.path_to_data = r"../data/datasets/eg085_01_01"
+        dataset_dict, len_train_set = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
                                                           test_size=args.test_split, seed=args.random_seed)
         #         # args.pat_to_data = r"../data/datasets/fzh-wde0459_03_03"
         # dataset_dict = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
@@ -425,8 +426,8 @@ if __name__ == "__main__":
                 reduction_factor=args.reduction_factor,
                 stop_last_trials=False,
             )
-            searcher = TuneBOHB_fix()
-            # searcher = tune.search.ConcurrencyLimiter(bohb_search, max_concurrent=args.max_concurrent_trials)
+            # searcher = TuneBOHB_fix()
+            searcher = tune.search.ConcurrencyLimiter(TuneBOHB_fix(), max_concurrent=args.max_concurrent_trials)
 
         elif args.search_schedule_mode == 'large_small_OPTUNA':
             from ray.tune.search.optuna import OptunaSearch
@@ -485,7 +486,8 @@ if __name__ == "__main__":
             "train_loop_config": {
                 "learning_rate": tune.loguniform(1e-5, 1e-1),
                 "warmup_steps": tune.randint(0, args.max_warmup_steps + 1), # Sample a integer uniformly between  (inclusive) and 15 (exclusive)
-                "per_device_train_batch_size": args.per_device_train_batch_size, #tune.choice([2, 4, 8, 16]), #args.per_device_train_batch_size, #tune.choice([2, 4, 8, 16]), #, 32, 64, 128, 256]),
+                "per_device_train_batch_size": args.per_device_train_batch_size,#tune.choice([2**(k+1) for k in range(int(math.log2(args.per_device_train_batch_size)))]
+), #args.per_device_train_batch_size, #tune.choice([2, 4, 8, 16]), #, 32, 64, 128, 256]),
                 "weight_decay": tune.uniform(0.0, 0.2),
                 # "max_steps": tune_epochs,
             }
