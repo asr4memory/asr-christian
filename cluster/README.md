@@ -2,8 +2,8 @@
 
 | Model | Original | BOHB_jan |
 |----------|----------|----------|
-| tiny    | 88.15    | Data 2   |
-| small    | 63.23    | Data 4   |
+| tiny    | 88.15    | 91.54   |
+| small    | 63.23    | 60.14   |
 | medium   | 60.62    | Data 6   |
 
 
