@@ -21,4 +21,6 @@
 
 # Useful formulas
 
-total Gradient steps = round_up(length_train_set / per_device_train_batch_size) * num_epochs
+total_Gradient_steps = round_up(length_train_set / per_device_train_batch_size) * num_epochs
+
+iterations = round_up(total_Gradient_steps / save_steps)
