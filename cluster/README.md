@@ -5,6 +5,7 @@
 | tiny    | 88.15    | 91.54   |
 | small    | 63.23    | 60.14   |
 | medium   | 60.62    | Data 6   |
+| lage-v3 | 27.98 | Data |
 
 
 # INSTRUCTIONS FOR CLUSTER
