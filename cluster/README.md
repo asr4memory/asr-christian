@@ -18,3 +18,7 @@
 
 
 4. Add the [/asr-finetune](asr-finetune) folder into you home directory.
+
+# Useful formulas
+
+total Gradient steps = round_up(length_train_set / per_device_train_batch_size) * num_epochs
