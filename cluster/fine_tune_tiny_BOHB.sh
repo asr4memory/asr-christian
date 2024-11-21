@@ -1,15 +1,15 @@
 #!/bin/bash
 
-#SBATCH --mail-user=<chrvt@zedat.fu-berlin.de>
+#SBATCH --mail-user=<peter.kompiel@fu-berlin.de>
 #SBATCH --mail-type=fail,end
 #SBATCH --job-name="train_tiny"
 #SBATCH --time=72:00:00
-#SBATCH --mem=16G  #32
+#SBATCH --mem=64G  #32
 
 #SBATCH --nodes=1
 ###SBATCH --exclusive
 #SBATCH --tasks-per-node=1  ### ensure that each Ray worker runtime will run on a separate node
-#SBATCH --cpus-per-task=10  ### cpus and gpus per node 
+#SBATCH --cpus-per-task=32  ### cpus and gpus per node 
 #SBATCH --gres=gpu:4
 
 ###SBATCH --mem-per-cpu=1GB
@@ -56,7 +56,7 @@ echo "IP Head: $ip_head"
 echo "Starting HEAD at $head_node"
 srun --nodes=1 --ntasks=1 -w "$head_node" \
     ray start --head --node-ip-address="$head_node_ip" --port=$port \
-    --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus 4 --block &
+    --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus 4 --block --temp-dir /scratch/kompiel/tmp_train &
 
 
 
@@ -85,9 +85,6 @@ echo "STARTING python command"
 #echo "STARTING python command"
 
 cd asr-finetune
-python -u main_ray_for_HF.py -c configs/train_whisper_tiny_BOHB_jan.config
+python -u main_ray_for_HF.py -c configs/configs/train_whisper_tiny_BOHB_feb.config
 
 #train_whisper_small_BOHB.config
-
-
-
