@@ -520,7 +520,7 @@ if __name__ == "__main__":
 
     best_result = tune_results.get_best_result()
 
-    logger.info('Best Result', best_result)
+    logger.info('Best Result %s', best_result)
 
 
     # save best result into folder
