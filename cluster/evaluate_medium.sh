@@ -25,6 +25,37 @@ module load cuDNN/8.4.1.50-CUDA-11.7.0
 nvidia-smi
 nvcc --version
 
+# Getting the node names
+nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+nodes_array=($nodes)
+
+head_node=${nodes_array[0]}
+head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
+
+# if we detect a space character in the head node IP, we'll
+# convert it to an ipv4 address. This step is optional.
+if [[ "$head_node_ip" == " " ]]; then
+IFS=' ' read -ra ADDR <<<"$head_node_ip"
+if [[ ${#ADDR[0]} -gt 16 ]]; then
+  head_node_ip=${ADDR[1]}
+else
+  head_node_ip=${ADDR[0]}
+fi
+echo "IPV6 address detected. We split the IPV4 address as $head_node_ip"
+fi
+
+port=6379
+ip_head=$head_node_ip:$port
+export ip_head
+echo "IP Head: $ip_head"
+
+echo "Starting HEAD at $head_node"
+srun --nodes=1 --ntasks=1 -w "$head_node" \
+    ray start --head --node-ip-address="$head_node_ip" --port=$port \
+    --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus 1 --block --temp-dir /scratch/kompiel/tmp_eval &
+
+export RAY_GCS_RPC_TIMEOUT_MS=10000
+
 
 cd asr-finetune
 #python -u evaluate_model.py -c configs/eval_whisper_medium.config 
