@@ -185,6 +185,8 @@ if __name__ == "__main__":
     logging.basicConfig(format="%(asctime)-5.5s %(name)-20.20s %(levelname)-7.7s %(message)s", datefmt="%H:%M", level=logging.DEBUG if args.debug else logging.INFO)
     logger.info("Hi!")
 
+    ray.init('auto') 
+    
     # set random seed for reproducibility
     set_seed(args.random_seed)
 
