@@ -315,7 +315,7 @@ if __name__ == "__main__":
         # dataset_dict = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
         #                                                  test_size=args.test_split)
     else:
-        ray.init()
+        ray.init("auto")
 
 
         # ray.init(address="auto", _redis_password = os.environ["redis_password"])
