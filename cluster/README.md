@@ -9,9 +9,9 @@
 | lage-v3 | 27.98 | Data |         |
 
 # PETER
-| Model | Original | BOHB_jan | multi_GPU |
-|----------|----------|----------|----------|
-| tiny    | 88.15    | -  | - |
+| Model | Original | - |
+|----------|----------|-|
+| tiny    | 88.15    | - |
 
 
 # INSTRUCTIONS FOR CLUSTER
