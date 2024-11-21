@@ -16,9 +16,7 @@
 
 # INSTRUCTIONS FOR CLUSTER
 
-1. Create a virtual environment and install the [requirements.txt](requirements.txt). 
-   I used mini-conda as my virtual environment manager: conda create --name <env> --file requirements.txt
-   With or using pip only: pip install -r requirements.txt within the environment
+1. Create a virtual environment with conda and python 3.10 ("conda create --name asr-christian python=3.10"). Install all the packages using within the environment ("pip install -r requirements.txt")
 
 
 3. Add the data you want to use in the folder [/data/datasets](data/datasets) in your home directory. The files used for training are in *eg_fzh-wde_combined_dataset_v1* which you need to download (on MMT or ask Peter). For convenience, I uploaded a smaller file for testing.
