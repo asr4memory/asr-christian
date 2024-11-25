@@ -1,12 +1,12 @@
 # WER-Results on test-set for eg_fzh-wde_combined_dataset_v1
 
 # CHRISTIAN
-| Model | Original | BOHB_jan | multi_GPU |
-|----------|----------|----------|----------|
-| tiny    | 88.15    | 91.54   | 68.48 |
-| small    | 63.23    | 60.14   |      |
-| medium   | 60.62    | Data 6   |     |
-| lage-v3 | 27.98 | Data |         |
+| Model | Original | BOHB_jan | multi_GPU | BOHB_feb|
+|----------|----------|----------|----------|----------|
+| tiny    | 88.15    | 91.54   | 68.48 | |
+| small    | 63.23    | 60.14   |      | 35.71 |
+| medium   | 60.62    | Data 6   |     | |
+| lage-v3 | 27.98 | Data |         |   |
 
 # PETER
 | Model | Original | - |
