@@ -38,6 +38,6 @@ iterations = round_up(total_Gradient_steps / save_steps)
 3. start job in terminal using sbatch.
 4. Monitor jobs with tensorboard:
    - log into the cluster via: ssh -L 16006:127.0.0.1:6007 <your_name@curta.zedat.fu-berlin.de>
-   - type in terminal: tensorboard --logdir /ray_results/<output_tag>
+   - type in terminal: tensorboard --logdir ~/ray_results/<output_tag>
    - open browser on your local machine and type: http://127.0.0.1:16006
    - Note that results will based on save_steps. So you need to be a bit patient for things to be seen.
