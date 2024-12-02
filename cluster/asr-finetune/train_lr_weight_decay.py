@@ -108,7 +108,6 @@ def parse_args():
     #https://docs.ray.io/en/latest/tune/api/doc/ray.tune.TuneConfig.html
     #https://docs.ray.io/en/latest/tune/api/schedulers.html#resourcechangingscheduler
 
-
     # For Scheduler and Search algorithm specifically
     parser.add_argument("--search_schedule_mode", type=str, default="large_small_BOHB", choices=TUNE_CHOICES, help="Which Searcher Algorithm and Scheduler combination. See 'get_searcher_and_scheduler' function for details.")
     parser.add_argument("--reduction_factor", type=int, default=2, help="Factor by which trials are reduced after grace_period of time intervals")
@@ -123,6 +122,7 @@ def parse_args():
                         help="Base directory where outputs are saved.")
     # parser.add_argument("--tag", type=str, default="post_vacation",help="Tag added to save folder")
     # parser.add_argument("-c", is_config_file=True, type=str, help="Config file path")
+    parser.add_argument("--resume_training", action="store_true", help="Whether or not to resume training.")
     parser.add_argument("--debug", action="store_true", help="Debug mode (more log output, additional callbacks)")
     parser.add_argument("--random_seed", type=int, default=1337, help="Random Seed for reproducibility")
     parser.add_argument("--push_to_hub", action="store_true", help="Push best model to Hugging Face")
@@ -157,6 +157,8 @@ def make_training_kwargs(args):
         "adam_beta2": 0.98,
         "seed": args.random_seed,
         "fp16": args.fp16,
+        "model_type": args.model_type,
+        "target_language": args.target_language,
         # "torch_empty_cache_steps": 1, # This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of about 10% slower performance.
     }
     # if args.tune:
@@ -184,7 +186,9 @@ def get_models(model_type,target_language):
 def train_model(config, training_kwargs=None, data_collator=None):
 
     # get models
-    model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language)
+    model, feature_extractor, tokenizer, processor = get_models(training_kwargs["model_type"],training_kwargs["target_language"])
+    del training_kwargs["model_type"]
+    del training_kwargs["target_language"]
 
     # Define metric for evaluation
     metric = evaluate.load("wer")
@@ -230,7 +234,6 @@ def train_model(config, training_kwargs=None, data_collator=None):
     # test_ds_iterable = test_ds.iter_torch_batches(
     #     batch_size=config["per_device_train_batch_size"], collate_fn=data_collator
     # )
-
     training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
     # training_kwargs["max_steps"] = 1000
 
@@ -320,11 +323,11 @@ if __name__ == "__main__":
         # dataset_dict = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
         #                                                  test_size=args.test_split)
     else:
-        ray.init()
-
-
+        ray.init("auto")
+        
         # ray.init(address="auto", _redis_password = os.environ["redis_password"])
         # register_ray()
+        pprint.pprint(ray.nodes())
         pprint.pprint(ray.cluster_resources())
         if args.path_to_data[-1] == 's':
             args.path_to_data = r"../data/datasets"  # /fzh-wde0459_03_03
@@ -374,7 +377,7 @@ if __name__ == "__main__":
     trainer = TorchTrainer(
         partial(train_model, training_kwargs=training_kwargs,
                 data_collator=data_collator),  # the training function to execute on each worker.
-        scaling_config=ScalingConfig(num_workers=args.num_workers, use_gpu=args.use_gpu, resources_per_worker = resources_per_trial),
+        scaling_config=ScalingConfig(num_workers=args.num_workers, use_gpu=args.use_gpu, resources_per_worker = resources_per_trial, placement_strategy="SPREAD"),
         datasets={
             "train": ray_datasets["train"],
             "eval": ray_datasets["validation"],
@@ -433,6 +436,8 @@ if __name__ == "__main__":
             )
             # searcher = TuneBOHB_fix()
             searcher = tune.search.ConcurrencyLimiter(TuneBOHB_fix(), max_concurrent=args.max_concurrent_trials)
+            # if args.resume_training:
+            #     searcher.restore_from_dir(os.path.join("~/ray_results", args.output_tag,'searcher-state-2024-11-21_19-27-53.pkl'))
 
         elif args.search_schedule_mode == 'large_small_OPTUNA':
             from ray.tune.search.optuna import OptunaSearch
@@ -485,39 +490,67 @@ if __name__ == "__main__":
     #     "num_epochs": (2, 5)
     # }
     # https://docs.ray.io/en/latest/tune/api/doc/ray.tune.Tuner.html
-    tuner = Tuner(
-        trainer,
-        param_space={
-            "train_loop_config": {
-                "learning_rate": tune.loguniform(1e-5, 1e-1),
-                # "warmup_steps": tune.randint(0, args.max_warmup_steps + 1), # Sample a integer uniformly between  (inclusive) and 15 (exclusive)
-                "per_device_train_batch_size": args.per_device_train_batch_size, #tune.choice([2**(k+1) for k in range(int(math.log2(args.per_device_train_batch_size)))]
-                "weight_decay": 0.0, #tune.uniform(0.0, 0.2),
-                # "max_steps": tune_epochs,
-            }
-        },
-        tune_config=tune.TuneConfig(
-            max_concurrent_trials=args.max_concurrent_trials,
-            metric="eval_loss",
-            mode="min",
-            num_samples=args.num_samples, # num_samples (int) – Number of times to sample from the hyperparameter space..
-            search_alg=tune_searcher,
-            scheduler= tune_scheduler,
-            reuse_actors = args.reuse_actors,
 
-        ),
-        # run_config – Runtime configuration that is specific to individual trials.
-        # If passed, this will overwrite the run config passed to the Trainer, if applicable.
-        run_config=RunConfig(
-            name=args.output_tag,     # folder name where ray workers results are saved and basis for tensorboard viz.
-            # stop={"training_iteration": 100},  # after how many iterations to stop
-            checkpoint_config=CheckpointConfig(
-                num_to_keep= args.num_to_keep,
-                checkpoint_score_attribute="eval_loss",
-                checkpoint_score_order="min",
+    if args.resume_training:
+        # https://docs.ray.io/en/latest/tune/tutorials/tune-fault-tolerance.html#tune-fault-tolerance-ref
+        storage_path = os.path.expanduser("~/ray_results")
+        tuner = Tuner.restore(os.path.join(storage_path,args.output_tag),
+                              param_space={
+                              "train_loop_config": {
+                                  "learning_rate": tune.loguniform(1e-5, 1e-1),
+                                  "warmup_steps": 0, #tune.randint(0, args.max_warmup_steps + 1), # Sample a integer uniformly between  (inclusive) and 15 (exclusive)
+                                  "per_device_train_batch_size": args.per_device_train_batch_size, #tune.choice([2**(k+1) for k in range(int(math.log2(args.per_device_train_batch_size)))]
+                                  "weight_decay": tune.uniform(0.0, 0.2),
+                                                 }
+                              },
+                              trainable=trainer,
+                              resume_unfinished = True,
+                              resume_errored = True,
+                              restart_errored=False)
+    else:
+
+        tuner = Tuner(
+            trainer,
+            param_space={
+                "train_loop_config": {
+                    "learning_rate": tune.loguniform(1e-5, 1e-1),
+                    "warmup_steps": 0, #tune.randint(0, args.max_warmup_steps + 1), # Sample a integer uniformly between  (inclusive) and 15 (exclusive)
+                    "per_device_train_batch_size": args.per_device_train_batch_size, #tune.choice([2**(k+1) for k in range(int(math.log2(args.per_device_train_batch_size)))]
+                    "weight_decay": tune.uniform(0.0, 0.2),
+                    # "max_steps": tune_epochs,
+                }
+            },
+            tune_config=tune.TuneConfig(
+                max_concurrent_trials=args.max_concurrent_trials,
+                metric="eval_loss",
+                mode="min",
+                num_samples=args.num_samples, # num_samples (int) – Number of times to sample from the hyperparameter space..
+                search_alg=tune_searcher,
+                scheduler= tune_scheduler,
+                reuse_actors=args.reuse_actors,
+
             ),
-        ),
-    )
+            # run_config – Runtime configuration that is specific to individual trials.
+            # If passed, this will overwrite the run config passed to the Trainer, if applicable.
+            run_config=RunConfig(
+                name=args.output_tag,     # folder name where ray workers results are saved and basis for tensorboard viz.
+                # stop={"training_iteration": 100},  # after how many iterations to stop
+                checkpoint_config=CheckpointConfig(
+                    num_to_keep= args.num_to_keep,
+                    checkpoint_score_attribute="eval_loss",
+                    checkpoint_score_order="min",
+                ),
+            ),
+        )
+
+    # storage_path = os.path.expanduser("~/ray_results")
+    # tuner = Tuner.restore(os.path.join(storage_path,args.output_tag),
+    #                       trainable=trainer,
+    #                       resume_unfinished = True,
+    #                       resume_errored = True,
+    #                       restart_errored=False)
+
+
     tune_results = tuner.fit()
 
     # pdb.set_trace()

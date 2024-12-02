@@ -28,7 +28,6 @@ import ray.train
 
 logger = logging.getLogger(__name__)
 
-
 # We define all the different parameters for the training, model, evaluation etc.
 # Whisper model type choices: https://huggingface.co/models?search=openai/whisper
 # openai/whisper-large-v3 sofa
@@ -101,6 +100,8 @@ def get_models(model_type,target_language):
     model = WhisperForConditionalGeneration.from_pretrained(model_type)
     model.generation_config.language = target_language
     model.generation_config.task = "transcribe"
+    # model.generation_config.max_new_tokens = 128
+    model.generation_config.return_timestamps = True
     model.generation_config.forced_decoder_ids = None
     return model, feature_extractor, tokenizer, processor
 
@@ -140,6 +141,10 @@ def eval_model(args, eval_dict, data_collator=None):
 
         wer = 100 * metric.compute(predictions=pred_str, references=label_str)
 
+        print(pred_str)
+        print(label_str)
+        # pred_str = model.tokenizer._normalize(pred_str)
+        # label_str = model.tokenizer._normalize(label_str)
         return {"wer": wer, "original": label_str, "predictions":pred_str}
 
 
@@ -156,19 +161,24 @@ def eval_model(args, eval_dict, data_collator=None):
     eval_results = {}
     count = -1
     wer_average = 0
-    for batch in test_ds_iterable:
-        count += 1
-        # inputs, labels = batch["input_features"], batch["labels"]
-        label_ids = batch["labels"] #tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
-        pred_ids = model.generate(batch["input_features"].to(device))
+    with torch.no_grad():
+        for batch in test_ds_iterable:
+            count += 1
+            # inputs, labels = batch["input_features"], batch["labels"]
+            label_ids = batch["labels"] #tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
+            generate_kwargs = {""}
+            # pdb.set_trace()
+            pred_ids = model.generate(batch["input_features"].to(device), max_new_tokens=128)
+            # pdb.set_trace()
+            outputs = compute_metrics(pred_ids,label_ids)
 
-        outputs = compute_metrics(pred_ids,label_ids)
+            eval_results[str(count)] = outputs
+            wer_average += outputs["wer"]
 
-        eval_results[str(count)] = outputs
-        wer_average += outputs["wer"]
-        if count % 50:
-            logger.info('WER for step %s...',count)
-            logger.info('...%s',outputs["wer"])
+            pdb.set_trace()
+            if count % 50:
+                logger.info('WER for step %s...',count)
+                logger.info('...%s',outputs["wer"])
 
     logger.info("WER average on Test Set %s", wer_average/(count+1))
 
@@ -191,53 +201,22 @@ if __name__ == "__main__":
     # get models
     model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language)
 
-    args.path_to_data = r"../data/datasets"
+    args.path_to_data = '/Users/chrvt/Documents/Python/FU_Berlin/ASR4memory/data/datasets/eval_test'
+        #r"../data/datasets"
     eval_dict, len_eval_set = load_and_prepare_data_for_eval(args.path_to_data, feature_extractor, tokenizer,
                                                           test_size=args.test_split, seed=args.random_seed)
 
-    # if args.debug:
-    #     args.warmup_steps = 0
-    #     args.eval_steps = 1
-    #     args.save_steps = 1
-    #     args.max_steps = 2
-    #     args.logging_steps = 1
-    #     ray.init()
-    #     pprint.pprint(ray.cluster_resources())
-    #     args.path_to_data = r"../data/datasets"
-    #     dataset_dict = load_and_prepare_data_from_folders(args.path_to_data, feature_extractor, tokenizer,
-    #                                                       test_size=args.test_split, seed=args.random_seed)
-    #     #         # args.pat_to_data = r"../data/datasets/fzh-wde0459_03_03"
-    #     # dataset_dict = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
-    #     #                                                  test_size=args.test_split)
-    # else:
-    #     ray.init()
-    #
-    #     pprint.pprint(ray.cluster_resources())
-    #     if args.path_to_data[-1] == 's':
-    #         args.path_to_data = r"../data/datasets"  # /fzh-wde0459_03_03
-    #         dataset_dict, len_train_set = load_and_prepare_data_from_folders(args.path_to_data, feature_extractor, tokenizer,
-    #                                                      test_size=args.test_split)
-    #     else:
-    #         args.path_to_data = r"../data/datasets/fzh-wde0459_03_03"
-    #         dataset_dict, len_train_set = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
-    #                                                       test_size=args.test_split) #, seed=args.random_seed)
-    #
-    #     logger.debug("Starting main_finetuning.py with arguments %s", args)
-    #
     logger.info('len_eval_set: %s',len_eval_set)
-
-
 
     # save settings for reproducibility, TODO: add random seed
     config_ = 'Parsed args:\n{}\n\n'.format(pprint.pformat(args.__dict__))
     args.output_dir = os.path.join(args.output_dir, args.search_schedule_mode, args.output_tag )
+
     # pdb.set_trace()
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
     save_file(config_,args.output_dir, file_tag = 'eval')
 
-    # get the relevant hyperparameter config and training kwargs (necessary for finetuning with ray)
-    # training_kwargs = make_training_kwargs(args)
 
     # prepare dataset dict
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(
@@ -245,6 +224,4 @@ if __name__ == "__main__":
         decoder_start_token_id=model.config.decoder_start_token_id,
     )
 
-    # pdb.set_trace()
     eval_model(args, eval_dict, data_collator=data_collator)
-

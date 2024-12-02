@@ -101,13 +101,9 @@ def parse_args():
     parser.add_argument("--max_t", type=int, default=10, help="Max number of steps for finding the best hyperparameters")
     parser.add_argument("--num_workers", type=int, default=1, help="Number of trials that can run at the same time")
     parser.add_argument("--cpus_per_trial", type=int, default=1, help="Number of CPUs per Ray actor")
-    parser.add_argument("--gpus_per_trial", type=float, default=0, help="Number of GPUs per Ray actor")
+    parser.add_argument("--gpus_per_trial", type=int, default=0, help="Number of GPUs per Ray actor")
     parser.add_argument("--use_gpu", action="store_true", help="If using GPU for the finetuning")
     parser.add_argument("--fp16", action="store_true", default=False, help="Training with floating point 16 ")
-    parser.add_argument("--reuse_actors", action="store_true", help="Reusing Ray Actors should accelarate training")
-    #https://docs.ray.io/en/latest/tune/api/doc/ray.tune.TuneConfig.html
-    #https://docs.ray.io/en/latest/tune/api/schedulers.html#resourcechangingscheduler
-
 
     # For Scheduler and Search algorithm specifically
     parser.add_argument("--search_schedule_mode", type=str, default="large_small_BOHB", choices=TUNE_CHOICES, help="Which Searcher Algorithm and Scheduler combination. See 'get_searcher_and_scheduler' function for details.")
@@ -214,7 +210,7 @@ def train_model(config, training_kwargs=None, data_collator=None):
 
     train_ds = ray.train.get_dataset_shard("train")
     eval_ds = ray.train.get_dataset_shard("eval")
-    # test_ds = ray.train.get_dataset_shard("test")
+    test_ds = ray.train.get_dataset_shard("test")
 
     # this is a hack - as train_ds from Ray requires the data_collotor, so does Seq2SeqTrainer from HF
     # but collating twice does not make sense, therefore we introduce the indentity collator
@@ -227,10 +223,9 @@ def train_model(config, training_kwargs=None, data_collator=None):
 
     eval_ds_iterable = eval_ds.iter_torch_batches(batch_size=config["per_device_train_batch_size"], collate_fn=data_collator)
 
-    # test_ds_iterable = test_ds.iter_torch_batches(
-    #     batch_size=config["per_device_train_batch_size"], collate_fn=data_collator
-    # )
-
+    test_ds_iterable = test_ds.iter_torch_batches(
+        batch_size=config["per_device_train_batch_size"], collate_fn=data_collator
+    )
     training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
     # training_kwargs["max_steps"] = 1000
 
@@ -278,11 +273,11 @@ def train_model(config, training_kwargs=None, data_collator=None):
 
     # calculate baseline performance on test set
     # if True:
-    # logger.info("Start Evaluation baseline model on Test Set")
+    logger.info("Start Evaluation baseline model on Test Set")
         # pdb.set_trace()
-    # baseline_results = trainer.evaluate(eval_dataset = test_ds_iterable)
+    baseline_results = trainer.evaluate(eval_dataset = test_ds_iterable)
 
-    # save_file(baseline_results, training_args.output_dir,  mode='eval_results', file_tag="baseline_on_test")
+    save_file(baseline_results, training_args.output_dir,  mode='eval_results', file_tag="baseline_on_test")
 
         # from utils import evaluluate_model
         # evaluluate_model(model,test_ds_iterable,tokenizer)
@@ -378,7 +373,7 @@ if __name__ == "__main__":
         datasets={
             "train": ray_datasets["train"],
             "eval": ray_datasets["validation"],
-            # "test": ray_datasets["test"], # we don't need this, saves space
+            "test": ray_datasets["test"],
         },
         run_config = RunConfig(
            checkpoint_config=CheckpointConfig(
@@ -490,9 +485,10 @@ if __name__ == "__main__":
         param_space={
             "train_loop_config": {
                 "learning_rate": tune.loguniform(1e-5, 1e-1),
-                # "warmup_steps": tune.randint(0, args.max_warmup_steps + 1), # Sample a integer uniformly between  (inclusive) and 15 (exclusive)
-                "per_device_train_batch_size": args.per_device_train_batch_size, #tune.choice([2**(k+1) for k in range(int(math.log2(args.per_device_train_batch_size)))]
-                "weight_decay": 0.0, #tune.uniform(0.0, 0.2),
+                "warmup_steps": tune.randint(0, args.max_warmup_steps + 1), # Sample a integer uniformly between  (inclusive) and 15 (exclusive)
+                "per_device_train_batch_size": args.per_device_train_batch_size,#tune.choice([2**(k+1) for k in range(int(math.log2(args.per_device_train_batch_size)))]
+), #args.per_device_train_batch_size, #tune.choice([2, 4, 8, 16]), #, 32, 64, 128, 256]),
+                "weight_decay": tune.uniform(0.0, 0.2),
                 # "max_steps": tune_epochs,
             }
         },
@@ -503,7 +499,6 @@ if __name__ == "__main__":
             num_samples=args.num_samples, # num_samples (int) – Number of times to sample from the hyperparameter space..
             search_alg=tune_searcher,
             scheduler= tune_scheduler,
-            reuse_actors = args.reuse_actors,
 
         ),
         # run_config – Runtime configuration that is specific to individual trials.

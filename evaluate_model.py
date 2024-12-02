@@ -230,7 +230,7 @@ if __name__ == "__main__":
 
     # save settings for reproducibility, TODO: add random seed
     config_ = 'Parsed args:\n{}\n\n'.format(pprint.pformat(args.__dict__))
-    args.output_dir = os.path.join(args.output_dir, args.search_schedule_mode, args.output_tag )
+    args.output_dir = os.path.join(args.output_dir, args.search_schedule_mode, args.output_tag, 'eval_results' )
     # pdb.set_trace()
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
