@@ -31,13 +31,13 @@ total_Gradient_steps = round_up(length_train_set / per_device_train_batch_size) 
 iterations = round_up(total_Gradient_steps / save_steps)
 
 
-# Instrucction for Job-Submisison
+# Instruction for Job-Submisison
 
 1. Create a new config-file (copy an existing and paste to the new). Important: change output_tag the outout tag which determines the folder name. Change some settings in # Performance Impacting Settings
 2. Create .sh script (copy an existing and paste to the new) for submitting the job. Important: cpus-per-task and gpu must match the requests from the .config file. Don't forget to change the config file at the very end of the .sh script.
 3. start job in terminal using sbatch.
 4. Monitor jobs with tensorboard:
-   - log into the cluster via: ssh -L 16006:127.0.0.1:6007 <your_name@curta.zedat.fu-berlin.de>
-   - type in terminal: tensorboard --logdir ~/ray_results/<output_tag>
+   - log into the cluster via: ssh -L 16006:127.0.0.1:6007 <your_name@clustername.domain.de>
+   - type in terminal: tensorboard --logdir /scratch/ahenderson/ray_results/whisper_tiny_BOHB_rh_feb/ --bind_all
    - open browser on your local machine and type: http://127.0.0.1:16006
    - Note that results will based on save_steps. So you need to be a bit patient for things to be seen.
