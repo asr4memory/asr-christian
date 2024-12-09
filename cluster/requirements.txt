@@ -239,7 +239,7 @@ pytorch-metric-learning=2.6.0=pypi_0
 pytz=2024.1=py312h06a4308_0
 pyyaml=6.0.2=py312h66e93f0_1
 rapidfuzz=3.10.1=pypi_0
-ray=2.38.0=pypi_0
+ray=2.40.0=pypi_0
 re2=2024.07.02=h77b4e00_1
 readline=8.2=h8228510_1
 referencing=0.35.1=pypi_0

@@ -6,31 +6,26 @@ finetuning using HF-Whisper: https://huggingface.co/blog/fine-tune-whisper
 For allowing Ray Tune Hyperparmeter finetunging with HF-Whisper, we follow the following tutorial:
 https://docs.ray.io/en/latest/train/getting-started-transformers.html
 
-A high-level overview of the script:
+A high-level overview of the training procsess:
     1.  We prepare the ray tune finetuning (Tuner) object. Defining the hyperparameters to tune, which scheduler to use
         how many resources to reserve for each training, how many trials etc.
-    2.  train_model will be called by each trial. This is the main training function based on the HF Seq2SeqTrainer.
+    2.  train_model will be called by each trial. This is the main training function based on the HF Seq2SeqTrainer,
+        see trainers.py
 
 For a description of what each function is doing, we refer to the docstrings of the very function.
-"""
 
+*Note*: For using this finetuning script for a different set-up (different model, different task the ASR), the
+get_models, train_model, and get_hyperparameters needs to be adjusted.
+"""
 import os
 from functools import partial
 import pprint
-import pdb
 import numpy as np
 
-from utils import  (load_and_prepare_data_from_folder, load_and_prepare_data_from_folders,
+from utils import  ( load_and_prepare_data_from_folders,list_of_strings,
                     DataCollatorSpeechSeq2SeqWithPadding, save_file, steps_per_epoch, normalize)
-import evaluate
 
 # laod models
-from transformers import WhisperFeatureExtractor
-from transformers import WhisperTokenizer
-from transformers import WhisperProcessor
-from transformers import WhisperForConditionalGeneration
-from transformers import Seq2SeqTrainingArguments
-from transformers import Seq2SeqTrainer
 from transformers import set_seed
 
 # For code organization and reporting
@@ -40,13 +35,13 @@ import logging
 # For hyperparameter optimization
 from ray import tune
 from ray.tune.schedulers import ASHAScheduler
-import ray
 from ray.train.torch import TorchTrainer
 from ray.train import RunConfig, ScalingConfig, CheckpointConfig
 import ray.train
-from ray.train.huggingface.transformers import prepare_trainer, RayTrainReportCallback
 from ray.tune import Tuner
-from ray.train import Checkpoint
+from models import get_whisper_models as get_models
+from trainers import train_whisper_model as train_model
+from trainers import make_seq2seq_training_kwargs as make_training_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +51,7 @@ def parse_args():
     """ Parses command line arguments for the training.
 
     In particular:
-            Whisper model type choices: https://huggingface.co/models?search=openai/whisper
+            model_type...Whisper model type choices: https://huggingface.co/models?search=openai/whisper
             Ray tune general options: https://docs.ray.io/en/latest/tune/api/doc/ray.tune.TuneConfig.html
             Ray Searcher options: https://docs.ray.io/en/latest/tune/api/schedulers.html#resourcechangingscheduler
     """
@@ -82,10 +77,10 @@ def parse_args():
     # model settings
     parser.add_argument("--model_type", type=str, default="openai/whisper-tiny", help="Model to optimize")
     parser.add_argument("--target_language", type=str, default="german", help="Target Language")
+    parser.add_argument("--return_timestamps", action="store_true", help="Return Timestemps mode for model")
 
     # Dataset settings
     parser.add_argument("--test_split", type=float, default=0.2, help="Percentage of test data.")
-    parser.add_argument("--path_to_data", type=str, default="../data/datasets/fzh-wde0459_03_03", help="Path to audio batch-prepared audio files.")
 
 
     ## Hyperparameter Optimization settings for Ray Tune
@@ -117,191 +112,20 @@ def parse_args():
     parser.add_argument("--perturbation_interval", type=int, default=10, help="Models will be considered for perturbation at this interval of time_attr.")
     parser.add_argument("--burn_in_period", type=int, default=1, help="Grace Period for PBT")
     # which hyperparameter to search for for
-    parser.add_argument('--hyperparameters', nargs='+', default=['learning_rate', 'weight_decay'], help="List of Hyperparameter to tune")
+    parser.add_argument('--hyperparameters', type=list_of_strings, action ="append", help="List of Hyperparameter to tune")
 
     # Other settings
+    parser.add_argument("--run_on_local_machine", action="store_true", help="Store true if training is on local machine.")
     parser.add_argument("--output_dir", type=str, default="./output", help="Base directory where outputs are saved.")
     parser.add_argument("--storage_path", type=str, default="/scratch/chrvt/ray_results", help="Where to store ray tune results. ")
     parser.add_argument("--resume_training", action="store_true", help="Whether or not to resume training.")
     parser.add_argument("--debug", action="store_true", help="Debug mode (more log output, additional callbacks)")
+    parser.add_argument("--path_to_data", type=str, default="../data/datasets/fzh-wde0459_03_03", help="Path to audio batch-prepared audio files if in debug mode. Otherwise: all data in datasets are loaded")
     parser.add_argument("--random_seed", type=int, default=1337, help="Random Seed for reproducibility")
-    parser.add_argument("--calculate_baseline", action="store_true", help="Calculates Performance (WER) on Test Set of original model (i.e. without finetuning)")
     parser.add_argument("-c", is_config_file=True, type=str, help="Config file path")
 
     args = parser.parse_args()
     return args
-
-# only those hyperparameter which should be optimized
-def make_training_kwargs(args):
-    """Training Arguments Filter for the train_model function.
-
-    This is not stricly required as we can also pass args into the train_model. However, it serves as an overview of the
-    relevant training arguments for the Seq2Seq Trainer:
-    https://huggingface.co/docs/transformers/main_classes/trainer#transformers.Seq2SeqTrainingArguments
-
-    In addition to the provided args, we set some default values based on the original Whisper Hyperparameters:
-    https://cdn.openai.com/papers/whisper.pdf, in particular the beta1 and beta 2 values of the AdamW optimizer (which
-    is the default optimzier) differ to the default parameters.
-
-    Args:
-        args (dict): dictionary of keyboard arguments
-    Returns:
-       training_kwargs (dict): dictionary of relevant training arguments
-    """
-    training_kwargs = {
-        "output_dir": args.output_dir,
-        "gradient_accumulation_steps": args.gradient_accumulation_steps,
-        "len_train_set": args.len_train_set,
-        "num_train_epochs": args.num_train_epochs,
-        "max_steps": 0,
-        "generation_max_length": args.generation_max_length,
-        "save_steps": args.save_steps,
-        "eval_steps": args.eval_steps,
-        "logging_steps": args.logging_steps,
-        "eval_delay": args.eval_delay, #int(args.max_steps/10),
-        "adam_beta1": 0.9,
-        "adam_beta2": 0.98,
-        "seed": args.random_seed,
-        "fp16": args.fp16,
-        "model_type": args.model_type,
-        "target_language": args.target_language,
-        # "torch_empty_cache_steps": 1, # This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of about 10% slower performance.
-    }
-    return training_kwargs
-
-def get_models(model_type,target_language):
-    """Loads Features Extractor, Tokenizer, Processecor and Model.
-
-    Ray requires to load the model and datasets within the train_model function. Therefore, such a function for loading
-    the models is required.
-
-    Args:
-       model_type (str): The model type to fine-tune.
-       target_language (str): The spoken language of the training set.
-    Returns:
-       model (WhisperForConditionalGeneration): loaded Whisper Object
-       features_extractor (WhisperFeatureExtractor): loaded Whisper Feature Extractor Object
-       tokenizer (WhisperTokenizer): loaded Whiseper Tokenizer Object
-       processor (WhisperProcessor): Loaded Whisper Processor Object
-    """
-    feature_extractor = WhisperFeatureExtractor.from_pretrained(model_type)
-    tokenizer = WhisperTokenizer.from_pretrained(model_type, language=target_language, task="transcribe")
-    processor = WhisperProcessor.from_pretrained(model_type, language=target_language, task="transcribe")
-    model = WhisperForConditionalGeneration.from_pretrained(model_type)
-    model.generation_config.language = target_language
-    model.generation_config.task = "transcribe"
-    model.generation_config.forced_decoder_ids = None
-    model.generation_config.return_timestamps = True
-
-    return model, feature_extractor, tokenizer, processor
-
-def train_model(config, training_kwargs=None, data_collator=None):
-    """Main training function for one specific Hyper Parameter configuration.
-
-    Each ray-worker (each hyperparameter configuration) executes this function. The training data needs to be in a ray
-    training iter object which requires a data_collator. However, since we already collated the data in the pre-
-    processing (see DataCollatorSpeechSeq2SeqWithPadding), we simply use the identity as collator.
-
-    The reporting and logging is done by ray tune automatically. To adopt this function for another fine-tuning project,
-    follow similar steps:
-    1. define the required models
-    2. define the evaluation metric
-    3. load the data into ray tune iter
-    4. define trainer Instance (here: Seq2SeqTrainer)
-    5. End with:
-        trainer.add_callback(RayTrainReportCallback())
-        trainer = prepare_trainer(trainer)
-        trainer.train()
-
-    Requires:
-       get_models (function): A function loading the necessary models for training and evaluation
-       compute_metrics (function): A function which computes the metrics (WER in our case)
-
-    Args:
-       config (tune.TuneConfig): Config File with Hyperparameter instances (automaticall generated by ray)
-       training_kwargs (dict): Dictionary of training arguments for the Hugging Face Seq2SeqTrainer
-    """
-    # get models
-    model, feature_extractor, tokenizer, processor = get_models(training_kwargs["model_type"],training_kwargs["target_language"])
-    del training_kwargs["model_type"]
-    del training_kwargs["target_language"]
-
-    # Define metric for evaluation
-    metric = evaluate.load("wer")
-    def compute_metrics(pred):
-        """Performance Metric calculator, here: Word Error Rate (WER)
-
-        Requires:
-            Initialized Tokenizer for decoded the predicitions and labels into human language
-            WER metric from the evaluate package
-        Args:
-            pred (dict): a dictionary with keys "predictions" and "label_ids"
-        Returns:
-            (dict): A dictionary with key "wer" and the corresponding value
-        """
-        pred_ids = pred.predictions
-        label_ids = pred.label_ids
-
-        # replace -100 with the pad_token_id
-        label_ids[label_ids == -100] = tokenizer.pad_token_id
-
-        # we do not want to group tokens when computing the metrics
-        pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-        # label_str = tokenizer.batch_decode(label_ids, skip_special_tokens=True)
-        wer = 100 * metric.compute(predictions=normalize(pred_str), references=normalize(label_str))
-
-        return {"wer": wer}
-
-    train_ds = ray.train.get_dataset_shard("train")
-    eval_ds = ray.train.get_dataset_shard("eval")
-
-    # this is a hack - as train_ds from Ray requires the data_collotor, so does Seq2SeqTrainer from HF
-    # but collating twice does not make sense, therefore we introduce the indentity collator
-    def data_collator_id(input):
-        """Identity Collator"""
-        return input
-
-    # the data collator takes our pre-processed data and prepares PyTorch tensors ready for the model.
-    train_ds_iterable = train_ds.iter_torch_batches(
-        batch_size=config["per_device_train_batch_size"], collate_fn=data_collator)
-
-    eval_ds_iterable = eval_ds.iter_torch_batches(batch_size=config["per_device_train_batch_size"], collate_fn=data_collator)
-
-    training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
-
-    del training_kwargs['len_train_set']  # we remove this as its not part of Seq2Seq
-    del training_kwargs['num_train_epochs']
-
-    training_args = Seq2SeqTrainingArguments(
-        gradient_checkpointing=True,
-        evaluation_strategy="steps",
-        save_strategy = "steps",
-        predict_with_generate=True,
-        report_to=["tensorboard"],
-        load_best_model_at_end=True,
-        metric_for_best_model="wer",
-        greater_is_better=False,
-        push_to_hub=False,
-        do_eval=True,
-        **config,
-        **training_kwargs,
-    )
-
-    trainer = Seq2SeqTrainer(
-        args=training_args,
-        model=model,
-        train_dataset=train_ds_iterable,
-        eval_dataset=eval_ds_iterable,
-        data_collator=data_collator_id,
-        compute_metrics=compute_metrics,
-        # tokenizer=tokenizer,  we don't need this as we do the pre-processing before
-    )
-
-    trainer.add_callback(RayTrainReportCallback())
-    trainer = prepare_trainer(trainer)
-    trainer.train()
-
-    # processor.save_pretrained(training_args.output_dir) # TODO: is this really necessary?
 
 
 if __name__ == "__main__":
@@ -312,7 +136,7 @@ if __name__ == "__main__":
     2. We define the TorchTrainer for each trial, including the resources (GPUs, CPUs, Workers) per trial
        https://docs.ray.io/en/latest/_modules/ray/train/torch/torch_trainer.html#TorchTrainer
     3. We define the searchers and schedulers (get_searcher_and_scheduler) used to find the optimizal paramters
-    4. We set-up a ray Tuber Object defining the the hyperparameters, and other important Configs 
+    4. We set-up a ray Tuner Object defining the the hyperparameters, and other important Configs 
     """
 
     """STEP 1: Data laoding and pre-processing"""
@@ -321,28 +145,32 @@ if __name__ == "__main__":
     args = parse_args()
     logging.basicConfig(format="%(asctime)-5.5s %(name)-20.20s %(levelname)-7.7s %(message)s", datefmt="%H:%M", level=logging.DEBUG if args.debug else logging.INFO)
     logger.info("Hi!")
-
     # set random seed for reproducibility
     set_seed(args.random_seed)
 
     # get models
-    model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language)
+    model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language,return_timestamps=args.return_timestamps)
 
-    ray.init("auto")
-    # ray.init(address="auto", _redis_password = os.environ["redis_password"])
-    logger.info("Ray Nodes info: %s": ray.nodes())
-    logger.info("Ray Cluster Resources: %s": ray.cluster_resources())
-
-    if args.path_to_data[-1] == 's':
-        args.path_to_data = r"../data/datasets"  # /fzh-wde0459_03_03
-        dataset_dict, len_train_set = load_and_prepare_data_from_folders(args.path_to_data, feature_extractor, tokenizer,
-                                                     test_size=args.test_split, seed=args.random_seed)
+    if args.run_on_local_machine:
+        ray.init()
     else:
-        args.path_to_data = r"../data/datasets/fzh-eg_fzh-wde_combined_dataset_v1"
-        dataset_dict, len_train_set = load_and_prepare_data_from_folder(args.path_to_data, feature_extractor, tokenizer,
-                                                      test_size=args.test_split, seed=args.random_seed) #, seed=args.random_seed)
+        # ray.init("auto")
+ # ray.init("auto")
+    # Could help to connect to head note
+        ip_head = os.getenv("ip_head")
+        if not ip_head:
+            raise RuntimeError("Head node address not found in environment variables.")
+        ray.init(address=ip_head)
 
-    logger.debug("Starting main_finetuning.py with arguments %s", args)
+    logger.info("Ray Nodes info: %s", ray.nodes())
+    logger.info("Ray Cluster Resources: %s", ray.cluster_resources())
+
+    path_to_data = args.path_to_data if args.debug else r"../data/datasets"
+    dataset_dict, len_train_set = load_and_prepare_data_from_folders(path_to_data, feature_extractor, tokenizer,
+                                                                     test_size=args.test_split, seed=args.random_seed,
+                                                                     evaluate = False, debug = args.debug)
+
+    logger.debug("Starting finetuning with arguments %s", args)
     logger.info('len_train_set: %s',len_train_set)
     args.len_train_set = len_train_set
 
@@ -367,7 +195,6 @@ if __name__ == "__main__":
     ray_datasets = {
         "train": ray.data.from_huggingface(dataset_dict["train"]),
         "validation": ray.data.from_huggingface(dataset_dict["validation"]),
-        "test": ray.data.from_huggingface(dataset_dict["test"]),
     }
 
     """STEP 2: Define the Ray Trainer
@@ -379,7 +206,6 @@ if __name__ == "__main__":
                      num_workers...number of workers used for each trial
                      placement_strategy...how job is distributed across different nodes
        datasets (dict): Dataset dictionary. Train and eval with ray_dataset objects is required. 
-  
     
     Reference: https://docs.ray.io/en/latest/_modules/ray/train/torch/torch_trainer.html#TorchTrainer
     """
@@ -443,14 +269,22 @@ if __name__ == "__main__":
             from ray.tune.schedulers.hb_bohb import HyperBandForBOHB
             # from ray.tune.search.bohb import TuneBOHB
             from bohb_search_fix import TuneBOHB_fix
-            # bohb_search.py
-            # https://docs.ray.io/en/latest/tune/api/schedulers.html#tune-scheduler-bohb
-            scheduler = HyperBandForBOHB(
-                time_attr="step", # defines the "time" as training iterations
+            scheduler = ASHAScheduler(
+                time_attr="step",
                 max_t=max_t_,
                 reduction_factor=args.reduction_factor,
-                stop_last_trials=False,
+                grace_period=args.grace_period,
             )
+            # bohb_search.py
+            # https://docs.ray.io/en/latest/tune/api/schedulers.html#tune-scheduler-bohb
+            # bug for with resuming with this scheudler:
+                # https://github.com/ray-project/ray/issues/39900
+            # scheduler = HyperBandForBOHB(
+            #     time_attr="step", # defines the "time" as training iterations
+            #     max_t=max_t_,
+            #     reduction_factor=args.reduction_factor,
+            #     stop_last_trials=False,
+            # )
             # searcher = TuneBOHB_fix()
             searcher = tune.search.ConcurrencyLimiter(TuneBOHB_fix(), max_concurrent=args.max_concurrent_trials)
 
@@ -458,11 +292,12 @@ if __name__ == "__main__":
             from ray.tune.search.optuna import OptunaSearch
             # https://docs.ray.io/en/latest/tune/api/suggestion.html#tune-optuna
             scheduler = ASHAScheduler(
+                time_attr="step",
                 max_t=max_t_,
                 reduction_factor=args.reduction_factor,
                 grace_period=args.grace_period,
             )
-            searcher = OptunaSearch()
+            searcher = tune.search.ConcurrencyLimiter(OptunaSearch(), max_concurrent=args.max_concurrent_trials)
 
         elif args.search_schedule_mode == 'large_large':
             from ray.tune.schedulers import PopulationBasedTraining
@@ -476,48 +311,50 @@ if __name__ == "__main__":
                     "train_loop_config": {
                                "learning_rate": tune.loguniform(1e-5, 1e-1),
                                "weight_decay": tune.uniform(0.0, 0.2),
-                }
+                                }
+                    }
             )
             searcher = BasicVariantGenerator() # default searcher
 
         return searcher, scheduler
 
-    tune_searcher, tune_scheduler  = get_searcher_and_scheduler(args)
+    tune_searcher, tune_scheduler = get_searcher_and_scheduler(args)
 
+    """Step 4: Set-up a ray Tuner [1]
 
-"""Step 4: Set-up a ray Tuner [1]
+    The Tuner Object takes the trainer, defines the param_space, configures the searcher and scheduler, while observing the
+    checkpointing config (more details below). 
 
-The Tuner Object takes the trainer, defines the param_space, configures the searcher and scheduler, while observing the
-checkpointing config (more details below). 
+    If resume_training = True, training is resumed from the previous interrupted training. Important: all the settings needs
+    to be the same as the original run. We resume unfinished and errored trials. Terminated trials will not be resumed.
+    Ref: [2] 
 
-If resume_training = True, training is resumed from the previous interrupted training. Important: all the settings needs
-to be the same as the original run. We resume unfinished and errored trials. Terminated trials will not be resumed.
-Ref: [2] 
+    More Details:
+        param_space (dict)...defines the hyper-parameter space we search for optimal parameters. Requires a prior distribut.
+                             over the hyperparameters. Instances of parameters will be passed to Seq2SeqTrainingArguments.
+                             In principle, every optimial parameter there can be part of the param_space.           
+        tune_config (Tune.Config) ... Config for deciding which metric to use for deifning a good trial (e.g. eval_loss or 
+                                      eval_wer,  number of total trials/hyperparameter set-ups (num_samples), searcher, 
+                                      scheduler. Reuse_actor optimizes resource usage so that all GPUs are always used.
+        run_config (RunConfig): Runtime configuration that is specific to individual trials.
+                    num_to_keep...how many checkpoints to keep (more requires more memory)
+                    checkpoint_score_attribute...which metric to use for performance
+                    checkpoint_score_order...min means the lower the checkpoint_score_attribute, the better
 
-More Details:
-    param_space (dict)...defines the hyper-parameter space we search for optimal parameters. Requires a prior distribut.
-                         over the hyperparameters. Instances of parameters will be passed to Seq2SeqTrainingArguments.
-                         In principle, every optimial parameter there can be part of the param_space.           
-    tune_config (Tune.Config) ... Config for deciding which metric to use for deifning a good trial (e.g. eval_loss or 
-                                  eval_wer,  number of total trials/hyperparameter set-ups (num_samples), searcher, 
-                                  scheduler. Reuse_actor optimizes resource usage so that all GPUs are always used.
-    run_config (RunConfig): Runtime configuration that is specific to individual trials.
-                num_to_keep...how many checkpoints to keep (more requires more memory)
-                checkpoint_score_attribute...which metric to use for performance
-                checkpoint_score_order...min means the lower the checkpoint_score_attribute, the better
-                
-References:
-    [1] https://docs.ray.io/en/latest/tune/api/doc/ray.tune.Tuner.html
-    [2] https://docs.ray.io/en/latest/tune/tutorials/tune-fault-tolerance.html#tune-fault-tolerance-ref 
-"""
-    HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay']
-    def get_train_loop(args):
+    References:
+        [1] https://docs.ray.io/en/latest/tune/api/doc/ray.tune.Tuner.html
+        [2] https://docs.ray.io/en/latest/tune/tutorials/tune-fault-tolerance.html#tune-fault-tolerance-ref 
+    """
+
+    def get_hyperparameters(args):
+        HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay']
         train_loop_config_ = {}
         train_loop_config_["per_device_train_batch_size"] = args.per_device_train_batch_size
         train_loop_config_["warmup_steps"] = 0
 
-        for hyper_param in args.hyperparameters:
-            assert hyper_param in HYPERPARAMETERS, "Hyperparameter search for this hyperparameter not implemented."
+        for hyper_param in args.hyperparameters[0]:
+            logger.debug("Adding hyperparameter %s to the search space", hyper_param)
+            assert hyper_param in HYPERPARAMETERS, logger.info("Hyperparameter search for %s not implemented",hyper_param)
 
             if hyper_param == 'learning_rate':
                 train_loop_config_[hyper_param] = tune.loguniform(1e-5, 1e-1)
@@ -528,20 +365,14 @@ References:
 
         return train_loop_config_
 
-if args.resume_training:
-        args.reuse_actors = False # otherwise somehow buggy when resuming training
+    if args.resume_training:
+        # args.reuse_actors = False # otherwise somehow buggy when resuming training
         tuner = Tuner.restore(os.path.join(args.storage_path, args.output_tag), trainable=trainer, resume_unfinished = True, resume_errored = True)
     else:
         tuner = Tuner(
             trainer,
             param_space={
-                "train_loop_config": get_train_loop(args)
-                    # {
-                    # "learning_rate": tune.loguniform(1e-5, 1e-1),
-                    # "warmup_steps": 0, #tune.randint(0, args.max_warmup_steps + 1), # Sample a integer uniformly between  (inclusive) and 15 (exclusive)
-                    # "per_device_train_batch_size": args.per_device_train_batch_size, #tune.choice([2**(k+1) for k in range(int(math.log2(args.per_device_train_batch_size)))]
-                    # "weight_decay": tune.uniform(0.0, 0.2),
-                    # # "max_steps": tune_epochs }
+                "train_loop_config": get_hyperparameters(args)
             },
             tune_config=tune.TuneConfig(
                 max_concurrent_trials=args.max_concurrent_trials,
